@@ -36,7 +36,7 @@ func TestAdminCheckTable(t *testing.T) {
 	tk.MustExec("insert into t values(1, 1, 1)")
 	tk.MustExec("admin check table t")
 
-	// test for add index on the later added columns.
+	// test for add index on the columns added later.
 	tk.MustExec("drop table if exists t1;")
 	tk.MustExec("CREATE TABLE t1 (c1 int);")
 	tk.MustExec("INSERT INTO t1 SET c1 = 1;")
@@ -61,7 +61,7 @@ func TestAdminCheckTable(t *testing.T) {
 		j year            as (JSON_EXTRACT(k,'$.j')),
 		k json);`)
 
-	tk.MustExec("insert into t1 set k='{\"a\": 100,\"c\":1.234,\"d\":1.2340000000,\"e\":\"abcdefg\",\"f\":\"2018-09-28\",\"g\":\"12:59:59\",\"h\":\"2018-09-28 12:59:59\",\"i\":\"2018-09-28 16:40:33\",\"j\":\"2018\"}';")
+	tk.MustExec(`insert into t1 set k='{"a": 100,"c":1.234,"d":1.2340000000,"e":"abcdefg","f":"2018-09-28","g":"12:59:59","h":"2018-09-28 12:59:59","i":"2018-09-28 16:40:33","j":"2018"}';`)
 	tk.MustExec("alter table t1 add index idx_a(a);")
 	tk.MustExec("alter table t1 add index idx_c(c);")
 	tk.MustExec("alter table t1 add index idx_d(d);")
