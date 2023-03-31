@@ -1319,6 +1319,9 @@ type SessionVars struct {
 
 	// StoreBatchSize indicates the batch size limit of store batch, set this field to 0 to disable store batch.
 	StoreBatchSize int
+
+	// DefaultTableEncryption defines the default encryption setting applied to schemas when they are created without specifying an ENCRYPTION clause.
+	DefaultTableEncryption bool
 }
 
 // GetNewChunkWithCapacity Attempt to request memory from the chunk pool

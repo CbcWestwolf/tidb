@@ -1959,6 +1959,8 @@ func BuildTableInfo(
 		tbInfo.Indices = append(tbInfo.Indices, idxInfo)
 	}
 
+	tbInfo.TableEncryption = ctx.GetSessionVars().DefaultTableEncryption
+
 	err = addIndexForForeignKey(ctx, tbInfo)
 	return tbInfo, err
 }

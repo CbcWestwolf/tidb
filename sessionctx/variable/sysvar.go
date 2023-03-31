@@ -582,7 +582,14 @@ var defaultSysVars = []*SysVar{
 	{Scope: ScopeGlobal, Name: DisconnectOnExpiredPassword, Value: On, Type: TypeBool, ReadOnly: true, GetGlobal: func(_ context.Context, s *SessionVars) (string, error) {
 		return BoolToOnOff(!IsSandBoxModeEnabled.Load()), nil
 	}},
-	{Scope: ScopeGlobal, Name: TableEncryptionPrivilegeCheck, Value: Off, Type: TypeBool},
+	{Scope: ScopeGlobal, Name: TableEncryptionPrivilegeCheck, Value: Off, Type: TypeBool,
+		GetGlobal: func(_ context.Context, sv *SessionVars) (string, error) {
+			return BoolToOnOff(TableEncryptPrivilegeCheck.Load()), nil
+		},
+		SetGlobal: func(_ context.Context, s *SessionVars, val string) error {
+			TableEncryptPrivilegeCheck.Store(TiDBOptOn(val))
+			return nil
+		}},
 
 	/* TiDB specific variables */
 	{Scope: ScopeGlobal, Name: TiDBTSOClientBatchMaxWaitTime, Value: strconv.FormatFloat(DefTiDBTSOClientBatchMaxWaitTime, 'f', -1, 64), Type: TypeFloat, MinValue: 0, MaxValue: 10,
@@ -1163,7 +1170,15 @@ var defaultSysVars = []*SysVar{
 	}},
 
 	/* The system variables below have GLOBAL and SESSION scope  */
-	{Scope: ScopeGlobal | ScopeSession, Name: DefaultTableEncryption, Value: Off, Type: TypeBool},
+	{Scope: ScopeGlobal | ScopeSession, Name: DefaultTableEncryption, Value: Off, Type: TypeBool,
+		SetSession: func(s *SessionVars, val string) error {
+			s.DefaultTableEncryption = TiDBOptOn(val)
+			return nil
+		},
+		GetSession: func(vars *SessionVars) (string, error) {
+			return BoolToOnOff(vars.DefaultTableEncryption), nil
+		},
+	},
 	{Scope: ScopeGlobal | ScopeSession, Name: TiDBEnablePlanReplayerCapture, Value: BoolToOnOff(false), Type: TypeBool,
 		SetSession: func(s *SessionVars, val string) error {
 			s.EnablePlanReplayerCapture = TiDBOptOn(val)
