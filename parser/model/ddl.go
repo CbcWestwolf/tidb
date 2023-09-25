@@ -803,6 +803,7 @@ func (job *Job) NotStarted() bool {
 }
 
 // MayNeedReorg indicates that this job may need to reorganize the data.
+// CBC: Indicate whether the job may need to reorganize the data.
 func (job *Job) MayNeedReorg() bool {
 	switch job.Type {
 	case ActionAddIndex, ActionAddPrimaryKey, ActionReorganizePartition,

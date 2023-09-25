@@ -38,6 +38,7 @@ For all character sets that are supported, TiDB accepts all of their collations 
 ```
 tidb> create table t(a varchar(20) charset utf8mb4 collate utf8mb4_general_ci key);
 Query OK, 0 rows affected
+
 tidb> show create table t;
 +-------+-------------------------------------------------------------+
 | Table | Create Table                                                |
@@ -48,8 +49,10 @@ tidb> show create table t;
 |       | ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin |
 +-------+-------------------------------------------------------------+
 1 row in set
+
 tidb> insert into t values ('A');
 Query OK, 1 row affected
+
 tidb> insert into t values ('a');
 Query OK, 1 row affected // Should report error "Duplicate entry 'a'"
 ```
@@ -57,11 +60,16 @@ In the case above, the user creates a column with a case-insensitive collation `
 
 What's more, the collation `utf8mb4_bin` in MySQL is defined with attribute `PAD SPACE`, that is, trailing spaces are ignored when comparison. Currently `utf8mb4_bin` in TiDB is actually with attribute `NO PAD`:
 
+> * `PAD SPACE`: 比较两个字符串时忽略末尾的空格 (For PAD SPACE collations, trailing spaces are insignificant in comparisons; strings are compared without regard to trailing spaces.)
+> * `NO PAD`: 比较两个字符串时比较末尾的空格 (NO PAD collations treat trailing spaces as significant in comparisons, like any other character.)
+
 ```
 tidb> create table t1(a varchar(20) charset utf8mb4 collate utf8mb4_bin key);
 Query OK, 0 rows affected
+
 tidb> insert into t1 values ('a')
 Query OK, 1 row affected
+
 tidb> insert into t1 values ('a ');
 Query OK, 1 row affected // Should report error "Duplicate entry 'a '"
 ```
@@ -86,7 +94,7 @@ Before diving into the details, we should notice that ALL strings in MySQL(and T
 
 ### Collate Interface
 
-There are bascially two functions needed for the collate comparison:
+There are basically two functions needed for the collate comparison:
 
   * Function that is used to compare two strings according to the given collation.
   * Function that is used to make a memory-comparable `sortKey` corresponding to the given string.
@@ -155,7 +163,7 @@ The reason to reject this option is, as a distributed system, the cost of potent
 
 As stated before, MySQL has various different collation implementations. For example, in MySQL 5.7, the default collation of `utf8mb4` is `utf8mb4_general_ci`, which has two main flaws:
 
-  * It only implement the `simple mappings` of UCA.
+  * It only implements the `simple mappings` of UCA.
   * It used a very old version of UCA.
 
 In MySQL 8, the default collation of `utf8mb4` has been changed to `utf8mb4_0900_ai_ci`, in which the Unicode version is upgraded to 9.0, with full UCA implementation.

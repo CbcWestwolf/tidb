@@ -60,6 +60,9 @@ const defaultTickDurationForLock = 4 * time.Minute
 const lockTimeToLive = 5 * time.Minute
 
 type KeyType interface {
+	// 泛型类型约束
+	// BackupKeyType 的底层类型是 string，RestoreKeyType 的底层类型是 int64
+	// ~ 符号表示所有以 string 或者 int64 为底层类型的类型都可以用于实例化
 	~BackupKeyType | ~RestoreKeyType
 }
 
