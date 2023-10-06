@@ -57,7 +57,7 @@ The followers is the scalability of hot index and shard index.
 
 Computing formula of scalability is  as bellow: `qps1` is the qps before expansion, `tikv1` is the tikv node count before expansion; `qps2` is the qps after expansion, `tikv2` is the tikv node count afterexpansion.
 
-<img alt="CNF 200" src=".\imgs\scalability-formula.png" width="200pt"/>
+<img alt="CNF 200" src="./imgs/scalability-formula.png" width="200pt"/>
 
 
 
