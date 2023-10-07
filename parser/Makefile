@@ -7,6 +7,15 @@ test: fmt parser
 
 parser: parser.go hintparser.go
 
+# 当前有两个 *arser.y: parser.y, hintparser.y
+# 	prefix 为 '' 或 'hint'
+# goyacc 参数：
+# 	-o string: parser output (default "y.go")
+# 	-p string: name prefix to use in generated code (default "yy")
+# 	-t string: name of the parser in the generated yyParse() function (default "Parser")
+# 实际执行命令:
+# 	bin/goyacc -o parser.go -p yy -t Parser parser.y
+#	bin/goyacc -o hintparser.go -p yyhint -t hintParser hintparser.y
 %arser.go: prefix = $(@:parser.go=)
 %arser.go: %arser.y bin/goyacc
 	@echo "bin/goyacc -o $@ -p yy$(prefix) -t $(prefix)Parser $<"

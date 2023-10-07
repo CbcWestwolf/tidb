@@ -815,12 +815,12 @@ func decodeRestoredValues(columns []rowcodec.ColInfo, restoredVal []byte) ([][]b
 
 // decodeRestoredValuesV5 decodes index values whose format is introduced in TiDB 5.0.
 // Unlike the format in TiDB 4.0, the new format is optimized for storage space:
-// 1. If the index is a composed index, only the non-binary string column's value need to write to value, not all.
-// 2. If a string column's collation is _bin, then we only write the number of the truncated spaces to value.
-// 3. If a string column is char, not varchar, then we use the sortKey directly.
+//  1. If the index is a composed index, only the non-binary string column's value need to write to value, not all.
+//  2. If a string column's collation is _bin, then we only write the number of the truncated spaces to value, since
+//     most of them are `PAD SPACE`, except for utf8mb4_0900_bin, whose PAD_ATTRIBUTE is `NO PAD`.
+//  3. If a string column is char, not varchar, then we use the sortKey directly.
 func decodeRestoredValuesV5(columns []rowcodec.ColInfo, results [][]byte, restoredVal []byte) ([][]byte, error) {
-	colIDOffsets := buildColumnIDOffsets(columns)
-	colInfosNeedRestore := buildRestoredColumn(columns)
+	colIDOffsets, colInfosNeedRestore := buildColumnIDOffsets(columns), buildRestoredColumn(columns)
 	rd := rowcodec.NewByteDecoder(colInfosNeedRestore, nil, nil, nil)
 	newResults, err := rd.DecodeToBytesNoHandle(colIDOffsets, restoredVal)
 	if err != nil {
