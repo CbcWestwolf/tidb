@@ -2004,7 +2004,6 @@ func (p *basePhysicalAgg) newPartialAggregate(copTaskType kv.StoreType, isMPPTas
 		AggFuncs:     finalPref.AggFuncs,
 		GroupByItems: finalPref.GroupByItems,
 		MppRunMode:   p.MppRunMode,
-		limitEnable:  p.limitEnable,
 		limitCount:   p.limitCount,
 	}.initForHash(p.ctx, p.stats, p.blockOffset, prop)
 	finalAgg.schema = finalPref.Schema

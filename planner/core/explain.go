@@ -434,7 +434,7 @@ func (p *basePhysicalAgg) explainInfo(normalized bool) string {
 		strs = append(strs, builder.String())
 		builder.Reset()
 	}
-	if p.limitEnable {
+	if p.limitCount > 0 {
 		builder.WriteString("limit:")
 		builder.WriteString(fmt.Sprintf("%d", p.limitCount))
 		strs = append(strs, builder.String())

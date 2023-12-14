@@ -1769,8 +1769,7 @@ type basePhysicalAgg struct {
 	MppRunMode       AggMppRunMode
 	MppPartitionCols []*property.MPPPartitionColumn
 
-	limitEnable bool
-	limitCount  uint64
+	limitCount uint64
 }
 
 func (p *basePhysicalAgg) IsFinalAgg() bool {
@@ -1906,8 +1905,7 @@ func NewPhysicalHashAgg(la *LogicalAggregation, newStats *property.StatsInfo, pr
 	agg := basePhysicalAgg{
 		GroupByItems: newGbyItems,
 		AggFuncs:     newAggFuncs,
-		limitEnable:  la.limit.enable,
-		limitCount:   la.limit.count,
+		limitCount:   la.limitCount,
 	}.initForHash(la.SCtx(), newStats, la.SelectBlockOffset(), prop)
 	return agg
 }

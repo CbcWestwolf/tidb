@@ -700,12 +700,9 @@ type LogicalAggregation struct {
 	// It is true when the agg is in the outer child tree of apply.
 	noCopPushDown bool
 
-	// limit is used in `distinct` + `limit` case.
+	// limitCount is used in `distinct` + `limit` case.
 	// only consider COUNT in limit clause
-	limit struct {
-		enable bool
-		count  uint64
-	}
+	limitCount uint64
 }
 
 // HasDistinct shows whether LogicalAggregation has functions with distinct.

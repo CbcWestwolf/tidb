@@ -360,7 +360,6 @@ func TestPhysicalPlanClone(t *testing.T) {
 	hashAgg := &PhysicalHashAgg{basePhysicalAgg: basePhysicalAgg{
 		AggFuncs:     aggDescs,
 		GroupByItems: []expression.Expression{col, cst},
-		limitEnable:  false,
 		limitCount:   0,
 	}}
 	hashAgg = hashAgg.initForHash(ctx, stats, 0)
