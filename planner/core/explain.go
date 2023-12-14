@@ -455,8 +455,10 @@ func (p *basePhysicalAgg) explainInfo(normalized bool) string {
 			builder.WriteString(", ")
 		}
 	}
-	strs = append(strs, builder.String())
-	builder.Reset()
+	if s := builder.String(); len(s) > 0 {
+		strs = append(strs, s)
+		builder.Reset()
+	}
 	if p.TiFlashFineGrainedShuffleStreamCount > 0 {
 		builder.WriteString(fmt.Sprintf("stream_count: %d", p.TiFlashFineGrainedShuffleStreamCount))
 		strs = append(strs, builder.String())
