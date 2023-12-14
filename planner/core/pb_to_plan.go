@@ -189,7 +189,7 @@ func (b *PBPlanBuilder) pbToLimit(e *tipb.Executor) (PhysicalPlan, error) {
 }
 
 func (b *PBPlanBuilder) pbToAgg(e *tipb.Executor, isStreamAgg bool) (PhysicalPlan, error) {
-	aggFuncs, groupBys, err := b.getAggInfo(e)
+	aggFuncs, groupBys, enableLimit, countLimit, err := b.getAggInfo(e)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -197,6 +197,8 @@ func (b *PBPlanBuilder) pbToAgg(e *tipb.Executor, isStreamAgg bool) (PhysicalPla
 	baseAgg := basePhysicalAgg{
 		AggFuncs:     aggFuncs,
 		GroupByItems: groupBys,
+		limitEnable:  enableLimit,
+		limitCount:   countLimit,
 	}
 	baseAgg.schema = schema
 	var partialAgg PhysicalPlan
@@ -220,21 +222,31 @@ func (b *PBPlanBuilder) buildAggSchema(aggFuncs []*aggregation.AggFuncDesc, grou
 	return schema
 }
 
-func (b *PBPlanBuilder) getAggInfo(executor *tipb.Executor) ([]*aggregation.AggFuncDesc, []expression.Expression, error) {
-	var err error
+func (b *PBPlanBuilder) getAggInfo(executor *tipb.Executor) ([]*aggregation.AggFuncDesc, []expression.Expression, bool, uint64, error) {
+	var (
+		err         error
+		enableLimit bool
+		countLimit  uint64
+	)
 	aggFuncs := make([]*aggregation.AggFuncDesc, 0, len(executor.Aggregation.AggFunc))
 	for _, expr := range executor.Aggregation.AggFunc {
 		aggFunc, err := aggregation.PBExprToAggFuncDesc(b.sctx, expr, b.tps)
 		if err != nil {
-			return nil, nil, errors.Trace(err)
+			return nil, nil, false, 0, errors.Trace(err)
 		}
 		aggFuncs = append(aggFuncs, aggFunc)
 	}
 	groupBys, err := expression.PBToExprs(executor.Aggregation.GetGroupBy(), b.tps, b.sctx.GetSessionVars().StmtCtx)
 	if err != nil {
-		return nil, nil, errors.Trace(err)
+		return nil, nil, false, 0, errors.Trace(err)
 	}
-	return aggFuncs, groupBys, nil
+	if executor.Aggregation.EnableLimit != nil {
+		enableLimit = *executor.Aggregation.EnableLimit
+	}
+	if executor.Aggregation.LimitCount != nil {
+		countLimit = *executor.Aggregation.LimitCount
+	}
+	return aggFuncs, groupBys, enableLimit, countLimit, nil
 }
 
 func (b *PBPlanBuilder) convertColumnInfo(tblInfo *model.TableInfo, pbColumns []*tipb.ColumnInfo) ([]*model.ColumnInfo, error) {

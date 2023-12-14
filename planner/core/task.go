@@ -98,6 +98,9 @@ type copTask struct {
 	// expectCnt is the expected row count of upper task, 0 for unlimited.
 	// It's used for deciding whether using paging distsql.
 	expectCnt uint64
+
+	// limit is used in `distinct` + `limit` case.
+	limit uint64
 }
 
 func (t *copTask) invalid() bool {
@@ -2001,6 +2004,8 @@ func (p *basePhysicalAgg) newPartialAggregate(copTaskType kv.StoreType, isMPPTas
 		AggFuncs:     finalPref.AggFuncs,
 		GroupByItems: finalPref.GroupByItems,
 		MppRunMode:   p.MppRunMode,
+		limitEnable:  p.limitEnable,
+		limitCount:   p.limitCount,
 	}.initForHash(p.ctx, p.stats, p.blockOffset, prop)
 	finalAgg.schema = finalPref.Schema
 	// partialAgg and finalAgg use the same ref of stats

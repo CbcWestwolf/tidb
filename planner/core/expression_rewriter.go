@@ -1003,7 +1003,7 @@ func (er *expressionRewriter) handleInSubquery(ctx context.Context, v *ast.Patte
 		er.b.optFlag |= flagEliminateProjection
 		er.b.optFlag |= flagJoinReOrder
 		// Build distinct for the inner query.
-		agg, err := er.b.buildDistinct(np, np.Schema().Len())
+		agg, err := er.b.buildDistinct(np, np.Schema().Len(), nil)
 		if err != nil {
 			er.err = err
 			return v, true

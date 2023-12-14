@@ -432,6 +432,11 @@ func (p *basePhysicalAgg) explainInfo(normalized bool) string {
 		builder.Write(sortedExplainExpressionList(p.GroupByItems))
 		builder.WriteString(", ")
 	}
+	if p.limitEnable {
+		builder.WriteString("limit:")
+		builder.WriteString(fmt.Sprintf("%d", p.limitCount))
+		builder.WriteString(", ")
+	}
 	for i := 0; i < len(p.AggFuncs); i++ {
 		builder.WriteString("funcs:")
 		var colName string
