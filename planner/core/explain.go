@@ -427,15 +427,18 @@ func (p *basePhysicalAgg) explainInfo(normalized bool) string {
 	}
 
 	builder := &strings.Builder{}
+	var strs []string
 	if len(p.GroupByItems) > 0 {
 		builder.WriteString("group by:")
 		builder.Write(sortedExplainExpressionList(p.GroupByItems))
-		builder.WriteString(", ")
+		strs = append(strs, builder.String())
+		builder.Reset()
 	}
 	if p.limitEnable {
 		builder.WriteString("limit:")
 		builder.WriteString(fmt.Sprintf("%d", p.limitCount))
-		builder.WriteString(", ")
+		strs = append(strs, builder.String())
+		builder.Reset()
 	}
 	for i := 0; i < len(p.AggFuncs); i++ {
 		builder.WriteString("funcs:")
@@ -452,10 +455,14 @@ func (p *basePhysicalAgg) explainInfo(normalized bool) string {
 			builder.WriteString(", ")
 		}
 	}
+	strs = append(strs, builder.String())
+	builder.Reset()
 	if p.TiFlashFineGrainedShuffleStreamCount > 0 {
-		builder.WriteString(fmt.Sprintf(", stream_count: %d", p.TiFlashFineGrainedShuffleStreamCount))
+		builder.WriteString(fmt.Sprintf("stream_count: %d", p.TiFlashFineGrainedShuffleStreamCount))
+		strs = append(strs, builder.String())
+		builder.Reset()
 	}
-	return builder.String()
+	return strings.Join(strs, ", ")
 }
 
 // ExplainNormalizedInfo implements Plan interface.

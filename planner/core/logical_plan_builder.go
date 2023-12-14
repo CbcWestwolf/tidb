@@ -1686,7 +1686,7 @@ func (b *PlanBuilder) buildDistinct(child LogicalPlan, length int, limit *ast.Li
 	}
 	if limit != nil {
 		count, offset, err := extractLimitCountOffset(b.ctx, limit)
-		if err != nil && offset == 0 && count != 0 {
+		if err == nil && offset == 0 && count != 0 {
 			plan4Agg.limit.enable = true
 			plan4Agg.limit.count = count
 		}
