@@ -702,3 +702,31 @@ func TestExplainFormatPlanCache(t *testing.T) {
 		tk.MustQuery("select @@last_plan_from_cache").Check(testkit.Rows("0"))
 	}
 }
+
+// For statement `SELECT DISTINCT col1, col2 FROM t LIMIT 3`, where NO composite index for (col1, col2),
+// we can push the `limit` information into HashAgg to speed up the execution.
+func TestDistinctLimitOptimization(t *testing.T) {
+	store := testkit.CreateMockStore(t)
+	tk := testkit.NewTestKit(t, store)
+	tk.MustExec("use test")
+	tk.MustExec("drop table if exists t")
+	tk.MustExec("create table t (id int auto_increment primary key, col1 varchar(40), col2 varchar(2));")
+	tk.MustExec("alter table t add index idx_col1(col1);")
+	tk.MustExec("insert into t(col1,col2) values('abcdef','0');")
+	for i := 0; i < 5; i++ {
+		tk.MustExec("insert into t(col1,col2) select col1,col2 from t;")
+	}
+	tk.MustExec("update t set col1=concat(col1,id);")
+	tk.MustExec("analyze table t;")
+	tk.MustQuery("explain select distinct col1,col2 from t limit 3;").Check(testkit.Rows(
+		"Limit_9 3.00 root  offset:0, count:3",
+		"└─HashAgg_14 3.00 root  group by:test.t.col1, test.t.col2, limit:3, funcs:firstrow(test.t.col1)->test.t.col1, funcs:firstrow(test.t.col2)->test.t.col2",
+		"  └─TableReader_15 3.00 root  data:HashAgg_10",
+		"    └─HashAgg_10 3.00 cop[tikv]  group by:test.t.col1, test.t.col2, limit:3",
+		"      └─TableFullScan_13 32.00 cop[tikv] table:t keep order:false"))
+	res := tk.MustQuery("explain analyze select distinct col1,col2 from t limit 3;")
+	// HashAgg_14
+	require.Contains(t, res.Rows()[1][6], "limit:3")
+	// HashAgg_10
+	require.Contains(t, res.Rows()[3][6], "limit:3")
+}
