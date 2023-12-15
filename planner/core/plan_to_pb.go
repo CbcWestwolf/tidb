@@ -65,7 +65,8 @@ func (p *PhysicalHashAgg) ToPB(ctx sessionctx.Context, storeType kv.StoreType) (
 		return nil, err
 	}
 	aggExec := &tipb.Aggregation{
-		GroupBy: groupByExprs,
+		GroupBy:    groupByExprs,
+		LimitCount: &p.limitCount,
 	}
 	for _, aggFunc := range p.AggFuncs {
 		agg, err := aggregation.AggFuncToPBExpr(ctx, client, aggFunc, storeType)
