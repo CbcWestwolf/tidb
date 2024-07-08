@@ -61,11 +61,21 @@ func (c *Column) AppendSet(set types.Set) {
 // Column stores one column of data in Apache Arrow format.
 // See https://arrow.apache.org/docs/format/Columnar.html#format-columnar
 type Column struct {
-	length     int
-	nullBitmap []byte  // bit 0 is null, 1 is not null
-	offsets    []int64 // used for varLen column. Row i starts from data[offsets[i]]
-	data       []byte
-	elemBuf    []byte
+	// 这个 column 有多少行数据
+	length int
+
+	nullBitmap []byte // bit 0 is null, 1 is not null
+
+	// 给变长的数据使用
+	// ResizeXXX 都是变长数据
+	offsets []int64 // used for varLen column. Row i starts from data[offsets[i]]
+
+	// 存放具体的数据（定长和非定长的数据都在这里）
+	data []byte
+
+	// 给定长的数据使用，当需要读或者写一个数据的时候，使用它作为临时 buffer 来辅助 encode 和 decode
+	// ReserveXXX 都是定长数据
+	elemBuf []byte
 
 	avoidReusing bool // avoid reusing the Column by allocator
 }

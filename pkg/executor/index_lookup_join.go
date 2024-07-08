@@ -56,6 +56,20 @@ var _ exec.Executor = &IndexLookUpJoin{}
 // 2. The innerWorker receives the task, builds key ranges from outer rows and fetch inner rows, builds inner row hash map.
 // 3. main thread receives the task, waits for inner worker finish handling the task.
 // 4. main thread join each outer row by look up the inner rows hash map in the task.
+/*
+TiDB 的 ILJ 算子是一个多线程的实现，主要的线程有： Main Thead，Outer Worker，和 Inner Worker：
+- Outer Worker 一个：
+- 按 batch 遍历 Outer 表，并封装对应的 task
+- 将 task 发送给 Inner Worker 和 Main Thread
+- Inner Worker N 个：
+  - 读取 Outer Worker 构建的 task
+  - 根据 task 中的 Outer 表数据，构建 Inner 表的扫描范围，并构造相应的物理执行算子读取该范围内的 Inner 表数据
+  - 对读取的 Inner 表数据创建对应的哈希表并存入 task
+- Main Thread 一个：
+  - 启动 Outer Worker 及 Inner Workers
+  - 读取 Outer Worker 构建的 task，并对每行 Outer 数据在对应的哈希表中 probe
+  - 对 probe 到的数据进行 join 并返回执行结果
+*/
 type IndexLookUpJoin struct {
 	exec.BaseExecutor
 

@@ -122,9 +122,20 @@ type HashJoinExec struct {
 	exec.BaseExecutor
 	*hashJoinCtx
 
+	// 一个主线程，执行以下工作：
+	// 1. 启动 probeWorkers 和 buildWorker 后台工作
+	// 2. 等待 probeWorkers 的 join 结果
+	// 3. 将 probeWorkers 计算出的 join 结果返回给 NextChunk 接口的调用方法
+
+	// 一个 probeSideTupleFetcher，负责读取 Probe 表的数据并发送给 ProbeWorker
 	probeSideTupleFetcher *probeSideTupleFetcher
-	probeWorkers          []*probeWorker
-	buildWorker           *buildWorker
+
+	// 多个 probeWorker，负责接收 probeSideTupleFetcher 传递的数据、查哈希表、Join 匹配的 Probe 和 Build 表的数据，
+	// 并把结果传递给主线程
+	probeWorkers []*probeWorker
+
+	// 一个 buildWorker，负责读取 Build 表的数据并创建哈希表
+	buildWorker *buildWorker
 
 	workerWg util.WaitGroupWrapper
 	waiterWg util.WaitGroupWrapper
@@ -135,6 +146,10 @@ type HashJoinExec struct {
 // probeChkResource stores the result of the join probe side fetch worker,
 // `dest` is for Chunk reuse: after join workers process the probe side chunk which is read from `dest`,
 // they'll store the used chunk as `chk`, and then the probe side fetch worker will put new data into `chk` and write `chk` into dest.
+// 整体上 probeSideTupleFetcher 的计算逻辑是：
+// 1. 从 probeChkResourceCh 中获取一个 probeChkResource ，存储在变量 probeResource 中；
+// 2. 从 Child 拉取数据，将数据写入到 probeResource 的 chk 字段中；
+// 3. 将这个 chk 发给需要 Probe 表的数据的 probeWorker 的 outputChs[i] 中去，这个信息记录在 probeChkResource 的 dest 字段中。
 type probeChkResource struct {
 	chk  *chunk.Chunk
 	dest chan<- *chunk.Chunk
@@ -232,6 +247,7 @@ func (e *HashJoinExec) Open(ctx context.Context) error {
 
 // fetchProbeSideChunks get chunks from fetches chunks from the big table in a background goroutine
 // and sends the chunks to multiple channels which will be read by multiple join workers.
+// 不断读 probe 表的数据，并将获得的数据分发给各个 probeWorker
 func (fetcher *probeSideTupleFetcher) fetchProbeSideChunks(ctx context.Context, maxChunkSize int) {
 	hasWaitedForBuild := false
 	for {
@@ -371,6 +387,7 @@ func (e *HashJoinExec) initializeForProbe() {
 	// workers.
 	e.probeSideTupleFetcher.probeResultChs = make([]chan *chunk.Chunk, e.concurrency)
 	for i := uint(0); i < e.concurrency; i++ {
+		// 每个 probeWorker 一个, probeSideTupleFetcher 将获取到的 probe Chunk 写入到这个 channel 中供相应的 Join Worker 使用
 		e.probeSideTupleFetcher.probeResultChs[i] = make(chan *chunk.Chunk, 1)
 		e.probeWorkers[i].probeResultCh = e.probeSideTupleFetcher.probeResultChs[i]
 	}
@@ -1190,6 +1207,8 @@ func (e *HashJoinExec) Next(ctx context.Context, req *chunk.Chunk) (err error) {
 	}
 	req.Reset()
 
+	// 主线程的计算逻辑非常简单
+	// 1. 从 joinResultCh 中获取一个 join chunk
 	result, ok := <-e.joinResultCh
 	if !ok {
 		return nil
@@ -1198,7 +1217,9 @@ func (e *HashJoinExec) Next(ctx context.Context, req *chunk.Chunk) (err error) {
 		e.finished.Store(true)
 		return result.err
 	}
+	// 2. 将调用方传下来的 chk 和 Join Chunk 中的数据交换
 	req.SwapColumns(result.chk)
+	// 3. 把 Join Chunk 还给对应的 Probe Worker
 	result.src <- result.chk
 	return nil
 }
@@ -1210,6 +1231,7 @@ func (e *HashJoinExec) handleFetchAndBuildHashTablePanic(r any) {
 	close(e.buildFinished)
 }
 
+// buildWorker 读取 build 表数据
 func (e *HashJoinExec) fetchAndBuildHashTable(ctx context.Context) {
 	if e.stats != nil {
 		start := time.Now()
@@ -1224,6 +1246,7 @@ func (e *HashJoinExec) fetchAndBuildHashTable(ctx context.Context) {
 	e.workerWg.RunWithRecover(
 		func() {
 			defer trace.StartRegion(ctx, "HashJoinBuildSideFetcher").End()
+			// 这个过程不断调用 child 的 Next 接口，获取 Chunk 数据
 			e.buildWorker.fetchBuildSideRows(ctx, buildSideResultCh, fetchBuildSideRowsOk, doneCh)
 		},
 		func(r any) {
@@ -1253,6 +1276,7 @@ func (e *HashJoinExec) fetchAndBuildHashTable(ctx context.Context) {
 }
 
 // buildHashTableForList builds hash table from `list`.
+// 把每次函数调用所获取的 Chunk 存储到 rowContainer 中供接下来的计算使用
 func (w *buildWorker) buildHashTableForList(buildSideResultCh <-chan *chunk.Chunk) error {
 	var err error
 	var selected []bool
