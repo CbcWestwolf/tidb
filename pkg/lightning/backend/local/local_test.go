@@ -1789,8 +1789,9 @@ func TestSplitRangeAgain4BigRegionExternalEngine(t *testing.T) {
 		123,
 		456,
 		789,
-		true,
+		false,
 	)
+	require.Fail(t, "TODO: test EnableLocalStoreForCloud")
 
 	jobCh := make(chan *regionJob, 9)
 	jobWg := sync.WaitGroup{}

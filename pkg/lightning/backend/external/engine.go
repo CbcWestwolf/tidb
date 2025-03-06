@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"sort"
 	"sync"
 	"time"
 
@@ -30,7 +29,6 @@ import (
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/lightning/common"
-	"github.com/pingcap/tidb/pkg/lightning/log"
 	"github.com/pingcap/tidb/pkg/lightning/membuf"
 	"github.com/pingcap/tidb/pkg/metrics"
 	"github.com/pingcap/tidb/pkg/util/intest"
@@ -106,13 +104,7 @@ type Engine struct {
 
 	memKVsAndBuffers memKVsAndBuffers
 
-	// checkHotspot is true means we will check hotspot file when using MergeKVIter.
-	// if hotspot file is detected, we will use multiple readers to read data.
-	// if it's false, MergeKVIter will read each file using 1 reader.
-	// this flag also affects the strategy of loading data, either:
-	// 	less load routine + check and read hotspot file concurrently (add-index uses this one)
-	// 	more load routine + read each file using 1 reader (import-into uses this one)
-	checkHotspot bool
+	enableLocalStoreForCloud bool
 
 	keyAdapter         common.KeyAdapter
 	duplicateDetection bool
@@ -152,7 +144,7 @@ func NewExternalEngine(
 	ts uint64,
 	totalKVSize int64,
 	totalKVCount int64,
-	checkHotspot bool,
+	enableLocalStoreForCloud bool,
 ) common.Engine {
 	memLimiter := membuf.NewLimiter(memLimit)
 	return &Engine{
@@ -173,17 +165,17 @@ func NewExternalEngine(
 			membuf.WithPoolMemoryLimiter(memLimiter),
 			membuf.WithBlockSize(ConcurrentReaderBufferSizePerConc),
 		),
-		checkHotspot:       checkHotspot,
-		keyAdapter:         keyAdapter,
-		duplicateDetection: duplicateDetection,
-		duplicateDB:        duplicateDB,
-		dupDetectOpt:       dupDetectOpt,
-		workerConcurrency:  workerConcurrency,
-		ts:                 ts,
-		totalKVSize:        totalKVSize,
-		totalKVCount:       totalKVCount,
-		importedKVSize:     atomic.NewInt64(0),
-		importedKVCount:    atomic.NewInt64(0),
+		keyAdapter:               keyAdapter,
+		duplicateDetection:       duplicateDetection,
+		duplicateDB:              duplicateDB,
+		dupDetectOpt:             dupDetectOpt,
+		workerConcurrency:        workerConcurrency,
+		ts:                       ts,
+		totalKVSize:              totalKVSize,
+		totalKVCount:             totalKVCount,
+		importedKVSize:           atomic.NewInt64(0),
+		importedKVCount:          atomic.NewInt64(0),
+		enableLocalStoreForCloud: enableLocalStoreForCloud,
 	}
 }
 
@@ -205,20 +197,6 @@ func split[T any](in []T, groupNum int) [][]T {
 		}
 	}
 	return ret
-}
-
-func (e *Engine) getAdjustedConcurrency() int {
-	if e.checkHotspot {
-		// estimate we will open at most 8000 files, so if e.dataFiles is small we can
-		// try to concurrently process ranges.
-		adjusted := maxCloudStorageConnections / len(e.dataFiles)
-		if adjusted == 0 {
-			return 1
-		}
-		return min(adjusted, 8)
-	}
-	adjusted := min(e.workerConcurrency, maxCloudStorageConnections/len(e.dataFiles))
-	return max(adjusted, 1)
 }
 
 func getFilesReadConcurrency(
@@ -329,11 +307,19 @@ func (e *Engine) loadBatchRegionData(ctx context.Context, jobKeys [][]byte, outC
 	readRateHist.Observe(float64(size) / 1024.0 / 1024.0 / readSecond)
 	sortRateHist.Observe(float64(size) / 1024.0 / 1024.0 / sortSecond)
 
-	data := e.buildIngestData(
-		e.memKVsAndBuffers.keys,
-		e.memKVsAndBuffers.values,
-		e.memKVsAndBuffers.memKVBuffers,
-	)
+	data := &MemoryIngestData{
+		keyAdapter:         e.keyAdapter,
+		duplicateDetection: e.duplicateDetection,
+		duplicateDB:        e.duplicateDB,
+		dupDetectOpt:       e.dupDetectOpt,
+		keys:               e.memKVsAndBuffers.keys,
+		values:             e.memKVsAndBuffers.values,
+		ts:                 e.ts,
+		memBuf:             e.memKVsAndBuffers.memKVBuffers,
+		refCnt:             atomic.NewInt64(0),
+		importedKVSize:     e.importedKVSize,
+		importedKVCount:    e.importedKVCount,
+	}
 
 	// release the reference of e.memKVsAndBuffers
 	e.memKVsAndBuffers.keys = nil
@@ -379,6 +365,11 @@ func (e *Engine) loadBatchRegionData(ctx context.Context, jobKeys [][]byte, outC
 	return nil
 }
 
+func (e *Engine) loadBatchRegionDataWithLocalStore(ctx context.Context, jobKeys [][]byte, outCh chan<- common.DataAndRanges) error {
+	// TODO
+	return nil
+}
+
 // LoadIngestData loads the data from the external storage to memory in [start,
 // end) range, so local backend can ingest it. The used byte slice of ingest data
 // are allocated from Engine.bufPool and must be released by
@@ -392,31 +383,19 @@ func (e *Engine) LoadIngestData(
 	failpoint.Inject("LoadIngestDataBatchSize", func(val failpoint.Value) {
 		regionBatchSize = val.(int)
 	})
+	loadBatchRegionData := e.loadBatchRegionData
+	if e.enableLocalStoreForCloud {
+		loadBatchRegionData = e.loadBatchRegionDataWithLocalStore
+	}
 	for start := 0; start < len(e.jobKeys)-1; start += regionBatchSize {
 		// want to generate N ranges, so we need N+1 keys
 		end := min(1+start+regionBatchSize, len(e.jobKeys))
-		err := e.loadBatchRegionData(ctx, e.jobKeys[start:end], outCh)
+		err := loadBatchRegionData(ctx, e.jobKeys[start:end], outCh)
 		if err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func (e *Engine) buildIngestData(keys, values [][]byte, buf []*membuf.Buffer) *MemoryIngestData {
-	return &MemoryIngestData{
-		keyAdapter:         e.keyAdapter,
-		duplicateDetection: e.duplicateDetection,
-		duplicateDB:        e.duplicateDB,
-		dupDetectOpt:       e.dupDetectOpt,
-		keys:               keys,
-		values:             values,
-		ts:                 e.ts,
-		memBuf:             buf,
-		refCnt:             atomic.NewInt64(0),
-		importedKVSize:     e.importedKVSize,
-		importedKVCount:    e.importedKVCount,
-	}
 }
 
 // KVStatistics returns the total kv size and total kv count.
@@ -532,238 +511,4 @@ func (e *Engine) Reset() error {
 		)
 	}
 	return nil
-}
-
-// MemoryIngestData is the in-memory implementation of IngestData.
-type MemoryIngestData struct {
-	keyAdapter         common.KeyAdapter
-	duplicateDetection bool
-	duplicateDB        *pebble.DB
-	dupDetectOpt       common.DupDetectOpt
-
-	keys   [][]byte
-	values [][]byte
-	ts     uint64
-
-	memBuf          []*membuf.Buffer
-	refCnt          *atomic.Int64
-	importedKVSize  *atomic.Int64
-	importedKVCount *atomic.Int64
-}
-
-var _ common.IngestData = (*MemoryIngestData)(nil)
-
-func (m *MemoryIngestData) firstAndLastKeyIndex(lowerBound, upperBound []byte) (int, int) {
-	firstKeyIdx := 0
-	if len(lowerBound) > 0 {
-		lowerBound = m.keyAdapter.Encode(nil, lowerBound, common.MinRowID)
-		firstKeyIdx = sort.Search(len(m.keys), func(i int) bool {
-			return bytes.Compare(lowerBound, m.keys[i]) <= 0
-		})
-		if firstKeyIdx == len(m.keys) {
-			return -1, -1
-		}
-	}
-
-	lastKeyIdx := len(m.keys) - 1
-	if len(upperBound) > 0 {
-		upperBound = m.keyAdapter.Encode(nil, upperBound, common.MinRowID)
-		i := sort.Search(len(m.keys), func(i int) bool {
-			reverseIdx := len(m.keys) - 1 - i
-			return bytes.Compare(upperBound, m.keys[reverseIdx]) > 0
-		})
-		if i == len(m.keys) {
-			// should not happen
-			return -1, -1
-		}
-		lastKeyIdx = len(m.keys) - 1 - i
-	}
-	return firstKeyIdx, lastKeyIdx
-}
-
-// GetFirstAndLastKey implements IngestData.GetFirstAndLastKey.
-func (m *MemoryIngestData) GetFirstAndLastKey(lowerBound, upperBound []byte) ([]byte, []byte, error) {
-	firstKeyIdx, lastKeyIdx := m.firstAndLastKeyIndex(lowerBound, upperBound)
-	if firstKeyIdx < 0 || firstKeyIdx > lastKeyIdx {
-		return nil, nil, nil
-	}
-	firstKey, err := m.keyAdapter.Decode(nil, m.keys[firstKeyIdx])
-	if err != nil {
-		return nil, nil, err
-	}
-	lastKey, err := m.keyAdapter.Decode(nil, m.keys[lastKeyIdx])
-	if err != nil {
-		return nil, nil, err
-	}
-	return firstKey, lastKey, nil
-}
-
-type memoryDataIter struct {
-	keys   [][]byte
-	values [][]byte
-
-	firstKeyIdx int
-	lastKeyIdx  int
-	curIdx      int
-}
-
-// First implements ForwardIter.
-func (m *memoryDataIter) First() bool {
-	if m.firstKeyIdx < 0 {
-		return false
-	}
-	m.curIdx = m.firstKeyIdx
-	return true
-}
-
-// Valid implements ForwardIter.
-func (m *memoryDataIter) Valid() bool {
-	return m.firstKeyIdx <= m.curIdx && m.curIdx <= m.lastKeyIdx
-}
-
-// Next implements ForwardIter.
-func (m *memoryDataIter) Next() bool {
-	m.curIdx++
-	return m.Valid()
-}
-
-// Key implements ForwardIter.
-func (m *memoryDataIter) Key() []byte {
-	return m.keys[m.curIdx]
-}
-
-// Value implements ForwardIter.
-func (m *memoryDataIter) Value() []byte {
-	return m.values[m.curIdx]
-}
-
-// Close implements ForwardIter.
-func (m *memoryDataIter) Close() error {
-	return nil
-}
-
-// Error implements ForwardIter.
-func (m *memoryDataIter) Error() error {
-	return nil
-}
-
-// ReleaseBuf implements ForwardIter.
-func (m *memoryDataIter) ReleaseBuf() {}
-
-type memoryDataDupDetectIter struct {
-	iter           *memoryDataIter
-	dupDetector    *common.DupDetector
-	err            error
-	curKey, curVal []byte
-	buf            *membuf.Buffer
-}
-
-// First implements ForwardIter.
-func (m *memoryDataDupDetectIter) First() bool {
-	if m.err != nil || !m.iter.First() {
-		return false
-	}
-	m.curKey, m.curVal, m.err = m.dupDetector.Init(m.iter)
-	return m.Valid()
-}
-
-// Valid implements ForwardIter.
-func (m *memoryDataDupDetectIter) Valid() bool {
-	return m.err == nil && m.iter.Valid()
-}
-
-// Next implements ForwardIter.
-func (m *memoryDataDupDetectIter) Next() bool {
-	if m.err != nil {
-		return false
-	}
-	key, val, ok, err := m.dupDetector.Next(m.iter)
-	if err != nil {
-		m.err = err
-		return false
-	}
-	if !ok {
-		return false
-	}
-	m.curKey, m.curVal = key, val
-	return true
-}
-
-// Key implements ForwardIter.
-func (m *memoryDataDupDetectIter) Key() []byte {
-	return m.buf.AddBytes(m.curKey)
-}
-
-// Value implements ForwardIter.
-func (m *memoryDataDupDetectIter) Value() []byte {
-	return m.buf.AddBytes(m.curVal)
-}
-
-// Close implements ForwardIter.
-func (m *memoryDataDupDetectIter) Close() error {
-	m.buf.Destroy()
-	return m.dupDetector.Close()
-}
-
-// Error implements ForwardIter.
-func (m *memoryDataDupDetectIter) Error() error {
-	return m.err
-}
-
-// ReleaseBuf implements ForwardIter.
-func (m *memoryDataDupDetectIter) ReleaseBuf() {
-	m.buf.Reset()
-}
-
-// NewIter implements IngestData.NewIter.
-func (m *MemoryIngestData) NewIter(
-	ctx context.Context,
-	lowerBound, upperBound []byte,
-	bufPool *membuf.Pool,
-) common.ForwardIter {
-	firstKeyIdx, lastKeyIdx := m.firstAndLastKeyIndex(lowerBound, upperBound)
-	iter := &memoryDataIter{
-		keys:        m.keys,
-		values:      m.values,
-		firstKeyIdx: firstKeyIdx,
-		lastKeyIdx:  lastKeyIdx,
-	}
-	if !m.duplicateDetection {
-		return iter
-	}
-	logger := log.FromContext(ctx)
-	detector := common.NewDupDetector(m.keyAdapter, m.duplicateDB.NewBatch(), logger, m.dupDetectOpt)
-	return &memoryDataDupDetectIter{
-		iter:        iter,
-		dupDetector: detector,
-		buf:         bufPool.NewBuffer(),
-	}
-}
-
-// GetTS implements IngestData.GetTS.
-func (m *MemoryIngestData) GetTS() uint64 {
-	return m.ts
-}
-
-// IncRef implements IngestData.IncRef.
-func (m *MemoryIngestData) IncRef() {
-	m.refCnt.Inc()
-}
-
-// DecRef implements IngestData.DecRef.
-func (m *MemoryIngestData) DecRef() {
-	if m.refCnt.Dec() == 0 {
-		m.keys = nil
-		m.values = nil
-		for _, b := range m.memBuf {
-			b.Destroy()
-		}
-	}
-}
-
-// Finish implements IngestData.Finish.
-func (m *MemoryIngestData) Finish(totalBytes, totalCount int64) {
-	m.importedKVSize.Add(totalBytes)
-	m.importedKVCount.Add(totalCount)
-
 }
