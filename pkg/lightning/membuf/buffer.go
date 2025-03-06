@@ -138,7 +138,7 @@ type Buffer struct {
 	blockCntLimit int
 	curBlock      []byte
 	curBlockIdx   int
-	curIdx        int
+	offset        int
 
 	smallObjOverhead      int
 	smallObjOverheadCache int
@@ -220,7 +220,7 @@ func (b *Buffer) Reset() {
 	if len(b.blocks) > 0 {
 		b.curBlock = b.blocks[0]
 		b.curBlockIdx = 0
-		b.curIdx = 0
+		b.offset = 0
 	}
 }
 
@@ -236,7 +236,7 @@ func (b *Buffer) Destroy() {
 	b.blocks = nil
 	b.curBlock = nil
 	b.curBlockIdx = -1
-	b.curIdx = 0
+	b.offset = 0
 }
 
 // TotalSize represents the total memory size of this Buffer.
@@ -263,9 +263,9 @@ func (b *Buffer) AllocBytes(n int) []byte {
 // Buffer. The advantage is that it's smaller than a slice, and it doesn't
 // contain a pointer thus more GC-friendly.
 type SliceLocation struct {
-	bufIdx int32
-	offset int32
-	length int32
+	blockIdx int32
+	offset   int32
+	length   int32
 }
 
 var sizeOfSliceLocation = int(unsafe.Sizeof(SliceLocation{}))
@@ -275,19 +275,21 @@ func (b *Buffer) allocBytesWithSliceLocation(n int) ([]byte, SliceLocation) {
 		return nil, SliceLocation{}
 	}
 
-	if b.curIdx+n > len(b.curBlock) {
+	if b.offset+n > len(b.curBlock) {
 		if b.blockCntLimit >= 0 && b.curBlockIdx+1 >= b.blockCntLimit {
 			return nil, SliceLocation{}
 		}
 		b.addBlock()
 	}
-	blockIdx := int32(b.curBlockIdx)
-	offset := int32(b.curIdx)
-	loc := SliceLocation{bufIdx: blockIdx, offset: offset, length: int32(n)}
+	loc := SliceLocation{
+		blockIdx: int32(b.curBlockIdx),
+		offset:   int32(b.offset),
+		length:   int32(n),
+	}
 
-	idx := b.curIdx
-	b.curIdx += n
-	return b.curBlock[idx:b.curIdx:b.curIdx], loc
+	idx := b.offset
+	b.offset += n
+	return b.curBlock[idx:b.offset:b.offset], loc
 }
 
 // AllocBytesWithSliceLocation is like AllocBytes, but it must allocate the
@@ -315,12 +317,12 @@ func (b *Buffer) addBlock() {
 		b.curBlockIdx = len(b.blocks) - 1
 	}
 
-	b.curIdx = 0
+	b.offset = 0
 }
 
 // GetSlice returns the byte slice for the slice location.
 func (b *Buffer) GetSlice(loc SliceLocation) []byte {
-	return b.blocks[loc.bufIdx][loc.offset : loc.offset+loc.length]
+	return b.blocks[loc.blockIdx][loc.offset : loc.offset+loc.length]
 }
 
 // AddBytes adds the bytes into this Buffer's managed memory and return it.

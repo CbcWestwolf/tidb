@@ -125,15 +125,16 @@ func (m *cloudImportExecutor) RunSubtask(ctx context.Context, subtask *proto.Sub
 	}
 	err = local.CloseEngine(ctx, &backend.EngineConfig{
 		External: &backend.ExternalEngineConfig{
-			StorageURI:    m.cloudStoreURI,
-			DataFiles:     sm.DataFiles,
-			StatFiles:     sm.StatFiles,
-			StartKey:      all.StartKey,
-			EndKey:        all.EndKey,
-			JobKeys:       jobKeys,
-			SplitKeys:     sm.RangeSplitKeys,
-			TotalFileSize: int64(all.TotalKVSize),
-			TotalKVCount:  0,
+			StorageURI:               m.cloudStoreURI,
+			DataFiles:                sm.DataFiles,
+			StatFiles:                sm.StatFiles,
+			StartKey:                 all.StartKey,
+			EndKey:                   all.EndKey,
+			JobKeys:                  jobKeys,
+			SplitKeys:                sm.RangeSplitKeys,
+			TotalFileSize:            int64(all.TotalKVSize),
+			TotalKVCount:             0,
+			EnableLocalStoreForCloud: m.job.ReorgMeta.UseLocalStorage,
 		},
 		TS: sm.TS,
 	}, engineUUID)

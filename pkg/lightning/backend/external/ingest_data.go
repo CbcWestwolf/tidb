@@ -258,34 +258,49 @@ func (m *MemoryIngestData) DecRef() {
 func (m *MemoryIngestData) Finish(totalBytes, totalCount int64) {
 	m.importedKVSize.Add(totalBytes)
 	m.importedKVCount.Add(totalCount)
-
 }
 
 // PebbleIngestData is an implementation of IngestData utilizing pebble.
 // Compared with MemoryIngestData, it costs less memory.
 type PebbleIngestData struct {
+	// duplicate detection
+	keyAdapter         common.KeyAdapter
+	duplicateDetection bool
+	duplicateDB        *pebble.DB
+	dupDetectOpt       common.DupDetectOpt
+
+	ts uint64
+
+	refCnt          *atomic.Int64
+	importedKVSize  *atomic.Int64
+	importedKVCount *atomic.Int64
 }
 
 func (PebbleIngestData) GetFirstAndLastKey(lowerBound, upperBound []byte) ([]byte, []byte, error) {
+	// TODO
 	return nil, nil, nil
 }
 
 func (PebbleIngestData) NewIter(ctx context.Context, lowerBound, upperBound []byte, bufPool *membuf.Pool) common.ForwardIter {
+	// TODO
 	return nil
 }
 
-func (PebbleIngestData) GetTS() uint64 {
-	return 0
+func (p PebbleIngestData) GetTS() uint64 {
+	return p.ts
 }
 
-func (PebbleIngestData) IncRef() {
-
+func (p *PebbleIngestData) IncRef() {
+	p.refCnt.Inc()
 }
 
-func (PebbleIngestData) DecRef() {
-
+func (p *PebbleIngestData) DecRef() {
+	if p.refCnt.Dec() == 0 {
+		// TODO: clean
+	}
 }
 
-func (PebbleIngestData) Finish(totalBytes, totalCount int64) {
-
+func (p *PebbleIngestData) Finish(totalBytes, totalCount int64) {
+	p.importedKVSize.Add(totalBytes)
+	p.importedKVCount.Add(totalCount)
 }
