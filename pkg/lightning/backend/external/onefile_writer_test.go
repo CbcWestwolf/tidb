@@ -257,6 +257,7 @@ func TestMergeOverlappingFilesInternal(t *testing.T) {
 	err = iter.Error()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "found duplicate key")
+	require.Fail(t, "TODO: PebbleIngestData")
 }
 
 func TestOnefileWriterManyRows(t *testing.T) {

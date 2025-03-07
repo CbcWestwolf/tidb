@@ -8,6 +8,7 @@ go_library(
         "concurrent_reader.go",
         "engine.go",
         "file.go",
+        "ingest_data.go",
         "iter.go",
         "kv_reader.go",
         "merge.go",

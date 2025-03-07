@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -532,7 +533,7 @@ func (local *Backend) doWrite(ctx context.Context, j *regionJob) error {
 		if totalSize >= regionMaxSize || totalCount >= j.regionSplitKeys {
 			// we will shrink the key range of this job to real written range
 			if iter.Next() {
-				remainingStartKey = append([]byte{}, iter.Key()...)
+				remainingStartKey = slices.Clone(iter.Key())
 				log.FromContext(ctx).Info("write to tikv partial finish",
 					zap.Int64("count", totalCount),
 					zap.Int64("size", totalSize),

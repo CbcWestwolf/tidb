@@ -329,7 +329,7 @@ func (em *engineManager) closeEngine(
 			ts,
 			externalCfg.TotalFileSize,
 			externalCfg.TotalKVCount,
-			externalCfg.CheckHotspot,
+			externalCfg.EnableLocalStoreForCloud,
 		)
 		em.externalEngine[engineUUID] = externalEngine
 		return nil

@@ -130,8 +130,8 @@ type ExternalEngineConfig struct {
 	// TotalFileSize can be an estimated value.
 	TotalFileSize int64
 	// TotalKVCount can be an estimated value.
-	TotalKVCount int64
-	CheckHotspot bool
+	TotalKVCount             int64
+	EnableLocalStoreForCloud bool
 }
 
 // CheckCtx contains all parameters used in CheckRequirements

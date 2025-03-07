@@ -489,7 +489,6 @@ func (e *writeAndIngestStepExecutor) RunSubtask(ctx context.Context, subtask *pr
 			SplitKeys:     sm.RangeSplitKeys,
 			TotalFileSize: int64(sm.TotalKVSize),
 			TotalKVCount:  0,
-			CheckHotspot:  false,
 		},
 		TS: sm.TS,
 	}, engineUUID)

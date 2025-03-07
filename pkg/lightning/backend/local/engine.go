@@ -89,23 +89,6 @@ type engineMeta struct {
 	TotalSize atomic.Int64 `json:"total_size"`
 }
 
-type syncedRanges struct {
-	sync.Mutex
-	ranges []common.Range
-}
-
-func (r *syncedRanges) add(g common.Range) {
-	r.Lock()
-	r.ranges = append(r.ranges, g)
-	r.Unlock()
-}
-
-func (r *syncedRanges) reset() {
-	r.Lock()
-	r.ranges = r.ranges[:0]
-	r.Unlock()
-}
-
 // Engine is a local engine.
 type Engine struct {
 	engineMeta
@@ -1012,7 +995,7 @@ func (e *Engine) newKVIter(ctx context.Context, opts *pebble.IterOptions, buf *m
 			e.logger.Panic("fail to create iterator")
 			return nil
 		}
-		return &pebbleIter{Iterator: iter, buf: buf}
+		return &PebbleIter{Iterator: iter, buf: buf}
 	}
 	logger := log.FromContext(ctx).With(
 		zap.String("table", common.UniqueTable(e.tableInfo.DB, e.tableInfo.Name)),
