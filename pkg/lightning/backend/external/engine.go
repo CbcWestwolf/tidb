@@ -118,6 +118,9 @@ type Engine struct {
 
 	importedKVSize  *atomic.Int64
 	importedKVCount *atomic.Int64
+
+	// For utilizing local disk
+	db atomic.Pointer[pebble.DB]
 }
 
 var _ common.Engine = (*Engine)(nil)

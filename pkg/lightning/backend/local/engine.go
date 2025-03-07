@@ -995,7 +995,7 @@ func (e *Engine) newKVIter(ctx context.Context, opts *pebble.IterOptions, buf *m
 			e.logger.Panic("fail to create iterator")
 			return nil
 		}
-		return &pebbleIter{Iterator: iter, buf: buf}
+		return &PebbleIter{Iterator: iter, buf: buf}
 	}
 	logger := log.FromContext(ctx).With(
 		zap.String("table", common.UniqueTable(e.tableInfo.DB, e.tableInfo.Name)),

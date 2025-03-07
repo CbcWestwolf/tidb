@@ -17,6 +17,10 @@ package external
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"fmt"
+	"io"
+	"os"
 	"sort"
 
 	"github.com/cockroachdb/pebble"
@@ -25,6 +29,8 @@ import (
 	"github.com/pingcap/tidb/pkg/lightning/membuf"
 	"go.uber.org/atomic"
 )
+
+const maxPebbleBatchSize = 4 << 20
 
 var _ common.IngestData = (*MemoryIngestData)(nil)
 var _ common.IngestData = (*PebbleIngestData)(nil)
@@ -263,6 +269,9 @@ func (m *MemoryIngestData) Finish(totalBytes, totalCount int64) {
 // PebbleIngestData is an implementation of IngestData utilizing pebble.
 // Compared with MemoryIngestData, it costs less memory.
 type PebbleIngestData struct {
+	db    *pebble.DB
+	batch *pebble.Batch
+
 	// duplicate detection
 	keyAdapter         common.KeyAdapter
 	duplicateDetection bool
@@ -281,8 +290,7 @@ func (PebbleIngestData) GetFirstAndLastKey(lowerBound, upperBound []byte) ([]byt
 	return nil, nil, nil
 }
 
-func (PebbleIngestData) NewIter(ctx context.Context, lowerBound, upperBound []byte, bufPool *membuf.Pool) common.ForwardIter {
-	// TODO
+func (p *PebbleIngestData) NewIter(ctx context.Context, lowerBound, upperBound []byte, bufPool *membuf.Pool) common.ForwardIter {
 	return nil
 }
 
@@ -303,4 +311,249 @@ func (p *PebbleIngestData) DecRef() {
 func (p *PebbleIngestData) Finish(totalBytes, totalCount int64) {
 	p.importedKVSize.Add(totalBytes)
 	p.importedKVCount.Add(totalCount)
+}
+
+// diskIter is a disk-based implementation of ForwardIter
+// to avoid OOM when dealing with large datasets.
+type diskIter struct {
+	tempFile     *os.File
+	currentKey   []byte
+	currentValue []byte
+	buf          *membuf.Buffer
+
+	// Error state
+	err error
+
+	// File navigation
+	valid        bool
+	keyLengthBuf [8]byte
+	valLengthBuf [8]byte
+
+	// Bounds
+	lowerBound []byte
+	upperBound []byte
+
+	// For cursor position and range validation
+	reachedEnd bool
+}
+
+// NewDiskIter creates a new disk-based iterator using a temporary file.
+func NewDiskIter(ctx context.Context, kvs map[string][]byte, lowerBound, upperBound []byte, bufPool *membuf.Pool) (*diskIter, error) {
+	// Create a temporary directory for our iterator
+	tempDir := os.TempDir()
+	tempFile, err := os.CreateTemp(tempDir, "diskiter-*")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp file: %w", err)
+	}
+
+	// Create and initialize the disk iterator
+	iter := &diskIter{
+		tempFile:   tempFile,
+		buf:        bufPool.NewBuffer(),
+		lowerBound: lowerBound,
+		upperBound: upperBound,
+	}
+
+	// Sort all keys for ordered iteration
+	keys := make([]string, 0, len(kvs))
+	for k := range kvs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	// Write key-value pairs to temporary file
+	// Format: [key length (8 bytes)][key bytes][value length (8 bytes)][value bytes]
+	for _, key := range keys {
+		// Skip keys outside our bounds
+		if (len(lowerBound) > 0 && bytes.Compare([]byte(key), lowerBound) < 0) ||
+			(len(upperBound) > 0 && bytes.Compare([]byte(key), upperBound) >= 0) {
+			continue
+		}
+
+		value := kvs[key]
+		keyLen := int64(len(key))
+		valueLen := int64(len(value))
+
+		// Write key length
+		binary.BigEndian.PutUint64(iter.keyLengthBuf[:], uint64(keyLen))
+		if _, err := tempFile.Write(iter.keyLengthBuf[:]); err != nil {
+			tempFile.Close()
+			os.Remove(tempFile.Name())
+			return nil, fmt.Errorf("failed to write key length: %w", err)
+		}
+
+		// Write key
+		if _, err := tempFile.Write([]byte(key)); err != nil {
+			tempFile.Close()
+			os.Remove(tempFile.Name())
+			return nil, fmt.Errorf("failed to write key: %w", err)
+		}
+
+		// Write value length
+		binary.BigEndian.PutUint64(iter.valLengthBuf[:], uint64(valueLen))
+		if _, err := tempFile.Write(iter.valLengthBuf[:]); err != nil {
+			tempFile.Close()
+			os.Remove(tempFile.Name())
+			return nil, fmt.Errorf("failed to write value length: %w", err)
+		}
+
+		// Write value
+		if _, err := tempFile.Write(value); err != nil {
+			tempFile.Close()
+			os.Remove(tempFile.Name())
+			return nil, fmt.Errorf("failed to write value: %w", err)
+		}
+	}
+
+	// Reset file pointer to beginning for iteration
+	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
+		tempFile.Close()
+		os.Remove(tempFile.Name())
+		return nil, fmt.Errorf("failed to reset file cursor: %w", err)
+	}
+
+	return iter, nil
+}
+
+// First implements ForwardIter.First
+func (d *diskIter) First() bool {
+	if d.err != nil {
+		return false
+	}
+
+	// Reset file cursor to beginning
+	if _, err := d.tempFile.Seek(0, io.SeekStart); err != nil {
+		d.err = fmt.Errorf("failed to reset file cursor: %w", err)
+		return false
+	}
+
+	// Read first entry
+	return d.readNext()
+}
+
+// readNext reads the next key-value pair from disk
+func (d *diskIter) readNext() bool {
+	// If we've already reached the end or have an error, return false
+	if d.reachedEnd || d.err != nil {
+		d.valid = false
+		return false
+	}
+
+	// Read key length
+	n, err := io.ReadFull(d.tempFile, d.keyLengthBuf[:])
+	if err == io.EOF || n == 0 {
+		d.reachedEnd = true
+		d.valid = false
+		return false
+	}
+	if err != nil {
+		d.err = fmt.Errorf("failed to read key length: %w", err)
+		d.valid = false
+		return false
+	}
+
+	keyLen := binary.BigEndian.Uint64(d.keyLengthBuf[:])
+
+	// Read key
+	d.currentKey = make([]byte, keyLen)
+	if _, err := io.ReadFull(d.tempFile, d.currentKey); err != nil {
+		d.err = fmt.Errorf("failed to read key: %w", err)
+		d.valid = false
+		return false
+	}
+
+	// Check if key is within bounds
+	if (len(d.lowerBound) > 0 && bytes.Compare(d.currentKey, d.lowerBound) < 0) ||
+		(len(d.upperBound) > 0 && bytes.Compare(d.currentKey, d.upperBound) >= 0) {
+		// Skip this entry and try the next one
+		return d.readNext()
+	}
+
+	// Read value length
+	if _, err := io.ReadFull(d.tempFile, d.valLengthBuf[:]); err != nil {
+		d.err = fmt.Errorf("failed to read value length: %w", err)
+		d.valid = false
+		return false
+	}
+
+	valueLen := binary.BigEndian.Uint64(d.valLengthBuf[:])
+
+	// Read value
+	d.currentValue = make([]byte, valueLen)
+	if _, err := io.ReadFull(d.tempFile, d.currentValue); err != nil {
+		d.err = fmt.Errorf("failed to read value: %w", err)
+		d.valid = false
+		return false
+	}
+
+	d.valid = true
+	return true
+}
+
+// Valid implements ForwardIter.Valid
+func (d *diskIter) Valid() bool {
+	return d.valid && d.err == nil
+}
+
+// Next implements ForwardIter.Next
+func (d *diskIter) Next() bool {
+	if !d.valid || d.err != nil {
+		return false
+	}
+
+	return d.readNext()
+}
+
+// Key implements ForwardIter.Key
+func (d *diskIter) Key() []byte {
+	if !d.valid {
+		return nil
+	}
+	return d.buf.AddBytes(d.currentKey)
+}
+
+// Value implements ForwardIter.Value
+func (d *diskIter) Value() []byte {
+	if !d.valid {
+		return nil
+	}
+	return d.buf.AddBytes(d.currentValue)
+}
+
+// Close implements ForwardIter.Close
+func (d *diskIter) Close() error {
+	// Clean up resources
+	if d.buf != nil {
+		d.buf.Destroy()
+	}
+
+	tempFileName := ""
+	if d.tempFile != nil {
+		tempFileName = d.tempFile.Name()
+		err := d.tempFile.Close()
+		if err != nil && d.err == nil {
+			d.err = err
+		}
+	}
+
+	// Remove the temporary file
+	if tempFileName != "" {
+		if err := os.Remove(tempFileName); err != nil && d.err == nil {
+			d.err = err
+		}
+	}
+
+	return d.err
+}
+
+// Error implements ForwardIter.Error
+func (d *diskIter) Error() error {
+	return d.err
+}
+
+// ReleaseBuf implements ForwardIter.ReleaseBuf
+func (d *diskIter) ReleaseBuf() {
+	if d.buf != nil {
+		d.buf.Reset()
+	}
 }

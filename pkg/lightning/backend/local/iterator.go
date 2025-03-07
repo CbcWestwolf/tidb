@@ -29,16 +29,17 @@ type IngestLocalEngineIter interface {
 	Last() bool
 }
 
-type pebbleIter struct {
+// PebbleIter implements IngestData interface
+type PebbleIter struct {
 	*pebble.Iterator
 	buf *membuf.Buffer
 }
 
-func (p *pebbleIter) ReleaseBuf() {
+func (p *PebbleIter) ReleaseBuf() {
 	p.buf.Reset()
 }
 
-func (p *pebbleIter) Close() error {
+func (p *PebbleIter) Close() error {
 	// only happens for GetFirstAndLastKey
 	if p.buf != nil {
 		p.buf.Destroy()
@@ -46,7 +47,7 @@ func (p *pebbleIter) Close() error {
 	return p.Iterator.Close()
 }
 
-func (p *pebbleIter) Key() []byte {
+func (p *PebbleIter) Key() []byte {
 	// only happens for GetFirstAndLastKey
 	if p.buf == nil {
 		return p.Iterator.Key()
@@ -54,11 +55,11 @@ func (p *pebbleIter) Key() []byte {
 	return p.buf.AddBytes(p.Iterator.Key())
 }
 
-func (p *pebbleIter) Value() []byte {
+func (p *PebbleIter) Value() []byte {
 	return p.buf.AddBytes(p.Iterator.Value())
 }
 
-var _ IngestLocalEngineIter = &pebbleIter{}
+var _ IngestLocalEngineIter = &PebbleIter{}
 
 type dupDetectIter struct {
 	keyAdapter  common.KeyAdapter
