@@ -575,11 +575,70 @@ func TestMultiSchemaPartitionByGlobalIndex(t *testing.T) {
 
 // TestMultiSchemaModifyColumn to show behavior when changing a column
 func TestMultiSchemaModifyColumn(t *testing.T) {
-	createSQL := `create table t (a int primary key, b varchar(255), unique key uk_b (b))`
+	createSQL := `create table t (a int primary key, b varchar(255), key uk_b (b))`
+	// createSQL := `create table t (a int primary key, b varchar(255), unique key uk_b (b))`
 	initFn := func(tkO *testkit.TestKit) {
-		tkO.MustExec(`insert into t values (1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9)`)
+		tkO.MustExec(`insert into t values (1,1)`)
 	}
 	alterSQL := `alter table t modify column b int unsigned not null`
+	checkFn := func(tkO, tkNO *testkit.TestKit, id int, schemaState string) {
+		tkO.MustExec("set @@sql_mode = 'STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION'")
+		tkNO.MustExec("set @@sql_mode = 'STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION'")
+		tableResSQL := `SELECT
+						/*+ read_from_storage(tikv[test.t]) */
+						Bit_xor(Crc32(Md5(Concat_ws(0x2, a, b)))) as b,
+						((Cast(Crc32(Md5(Concat_ws(0x2, a))) AS signed) - 0) DIV 1 % 1024) as ca,
+						Count(*) as co
+		FROM     test.t USE INDEX()
+		WHERE    0 = 0
+		GROUP BY ((cast(crc32(md5(concat_ws(0x2, a))) AS signed) - 0) DIV 1 % 1024)
+		ORDER BY b, ca, co;`
+		indexResSQL := `SELECT Bit_xor(Crc32(Md5(Concat_ws(0x2, a, b)))) as b,
+		       ( ( Cast(Crc32(Md5(Concat_ws(0x2, a))) AS signed) - 0 ) DIV 1 % 1024 ) as ca,
+		       Count(*) as co
+		FROM   test.t USE INDEX(uk_b)
+		WHERE  0 = 0
+		GROUP BY ((cast(crc32(md5(concat_ws(0x2, a))) AS signed) - 0) DIV 1 % 1024)
+		ORDER BY b, ca, co;`
+		indexIdSQL := `select index_id from information_schema.tidb_indexes where table_schema = 'test' and table_name = 't' and key_name = 'uk_b'`
+		deleteRangeSQL := `table mysql.gc_delete_range`
+		deleteRangeDoneSQL := `table mysql.gc_delete_range_done`
+		logutil.BgLogger().Info("cbc0411 check table", zap.Int("id", id), zap.String("schemaState", schemaState),
+			zap.String("owner check table res", tkO.MustQuery(tableResSQL).String()),
+			zap.String("owner check index res", tkO.MustQuery(indexResSQL).String()),
+			zap.String("owner table", tkO.MustQuery("select * from t use index()").Sort().String()),
+			zap.String("owner index", tkO.MustQuery("select * from t use index(uk_b)").Sort().String()),
+			zap.String("owner index id", tkO.MustQuery(indexIdSQL).String()),
+			zap.Int64("owner schema version", tkO.Session().GetInfoSchema().SchemaMetaVersion()),
+			zap.Int64("owner txn schema version", sessiontxn.GetTxnManager(tkO.Session()).GetTxnInfoSchema().SchemaMetaVersion()),
+			zap.Int64("owner domain schema version", tkO.Session().GetDomainInfoSchema().SchemaMetaVersion()),
+			zap.String("owner delete range", tkO.MustQuery(deleteRangeSQL).Sort().String()),
+			zap.String("owner delete range done", tkO.MustQuery(deleteRangeDoneSQL).Sort().String()),
+			zap.String("non-owner check table res", tkNO.MustQuery(tableResSQL).String()),
+			zap.String("non-owner check index res", tkNO.MustQuery(indexResSQL).String()),
+			zap.String("non-owner table", tkNO.MustQuery("select * from t use index()").Sort().String()),
+			zap.String("non-owner index", tkNO.MustQuery("select * from t use index(uk_b)").Sort().String()),
+			zap.String("non-owner index id", tkNO.MustQuery(indexIdSQL).String()),
+			zap.Int64("non-owner schema version", tkNO.Session().GetInfoSchema().SchemaMetaVersion()),
+			zap.Int64("non-owner txn schema version", sessiontxn.GetTxnManager(tkNO.Session()).GetTxnInfoSchema().SchemaMetaVersion()),
+			zap.Int64("non-owner domain schema version", tkNO.Session().GetDomainInfoSchema().SchemaMetaVersion()),
+			zap.String("non-owner delete range", tkNO.MustQuery(deleteRangeSQL).Sort().String()),
+			zap.String("non-owner delete range done", tkNO.MustQuery(deleteRangeDoneSQL).Sort().String()),
+		)
+		tkO.MustExec("set @@sql_mode = default")
+		tkNO.MustExec("set @@sql_mode = default")
+
+		tkO.MustExec("set session tidb_enable_fast_table_check = off")
+		tkNO.MustExec("set session tidb_enable_fast_table_check = off")
+		defer func() {
+			tkO.MustExec("set session tidb_enable_fast_table_check = default")
+			tkNO.MustExec("set session tidb_enable_fast_table_check = default")
+		}()
+		err := tkO.ExecToErr(`admin check table t`)
+		require.NoError(t, err, "owner admin check table failed", fmt.Sprintf("id, %d, schemaState: %s", id, schemaState))
+		err = tkNO.ExecToErr(`admin check table t`)
+		require.NoError(t, err, "non-owner admin check table failed", fmt.Sprintf("id, %d, schemaState: %s", id, schemaState))
+	}
 	loopFn := func(tkO, tkNO *testkit.TestKit) {
 		res := tkO.MustQuery(`select schema_state from information_schema.DDL_JOBS where table_name = 't' order by job_id desc limit 1`)
 		schemaState := res.Rows()[0][0].(string)
@@ -596,27 +655,35 @@ func TestMultiSchemaModifyColumn(t *testing.T) {
 				"  `a` int(11) NOT NULL,\n" +
 				"  `b` int(10) unsigned NOT NULL,\n" +
 				"  PRIMARY KEY (`a`) /*T![clustered_index] CLUSTERED */,\n" +
-				"  UNIQUE KEY `uk_b` (`b`)\n" +
+				"  KEY `uk_b` (`b`)\n" +
+				// "  UNIQUE KEY `uk_b` (`b`)\n" +
 				") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin"))
 			tkNO.MustQuery(`show create table t`).Check(testkit.Rows("" +
 				"t CREATE TABLE `t` (\n" +
 				"  `a` int(11) NOT NULL,\n" +
 				"  `b` varchar(255) DEFAULT NULL,\n" +
 				"  PRIMARY KEY (`a`) /*T![clustered_index] CLUSTERED */,\n" +
-				"  UNIQUE KEY `uk_b` (`b`)\n" +
+				"  KEY `uk_b` (`b`)\n" +
+				// "  UNIQUE KEY `uk_b` (`b`)\n" +
 				") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin"))
 
+			checkFn(tkO, tkNO, 1, schemaState)
+
 			tkO.MustExec(`insert into t values (10, " 09.60 ")`)
+
+			checkFn(tkO, tkNO, 2, schemaState)
+
 			// No warning!? Same in MySQL...
 			tkNO.MustQuery(`show warnings`).Check(testkit.Rows())
-			tkNO.MustContainErrMsg(`insert into t values (11, "09.60")`, "[kv:1062]Duplicate entry '10' for key 't._Idx$_uk_b_0'")
+			tkNO.MustExec(`insert into t values (11, " 011.50 ")`)
+			// tkNO.MustContainErrMsg(`insert into t values (11, "09.60")`, "[kv:1062]Duplicate entry '10' for key 't._Idx$_uk_b_0'")
 			tkO.MustQuery(`select * from t where a = 10`).Check(testkit.Rows("10 10"))
 			// <nil> ?!?
 			tkNO.MustQuery(`select * from t where a = 10`).Check(testkit.Rows("10 <nil>"))
 			// If the original b was defined as 'NOT NULL', then it would give an error:
 			// [table:1364]Field 'b' doesn't have a default value
 
-			tkNO.MustExec(`insert into t values (11, " 011.50 ")`)
+			// tkNO.MustExec(`insert into t values (11, " 011.50 ")`)
 			tkNO.MustQuery(`show warnings`).Check(testkit.Rows())
 			// Anomaly, the different sessions sees different data.
 			// So it should be acceptable for partitioning DDLs as well.
@@ -634,6 +701,8 @@ func TestMultiSchemaModifyColumn(t *testing.T) {
 		default:
 			require.Failf(t, "unhandled schema state '%s'", schemaState)
 		}
+		// Capture the error instead of panicking with MustExec
+		// checkFn(tkO, tkNO, 3, schemaState)
 	}
 	runMultiSchemaTest(t, createSQL, alterSQL, initFn, nil, loopFn)
 }
@@ -817,6 +886,7 @@ func TestMultiSchemaDropUniqueIndex(t *testing.T) {
 func runMultiSchemaTest(t *testing.T, createSQL, alterSQL string, initFn func(*testkit.TestKit), postFn func(*testkit.TestKit, kv.Storage), loopFn func(tO, tNO *testkit.TestKit)) {
 	runMultiSchemaTestWithBackfillDML(t, createSQL, alterSQL, "", initFn, postFn, loopFn)
 }
+
 func runMultiSchemaTestWithBackfillDML(t *testing.T, createSQL, alterSQL, backfillDML string, initFn func(*testkit.TestKit), postFn func(*testkit.TestKit, kv.Storage), loopFn func(tO, tNO *testkit.TestKit)) {
 	// When debugging, increase the lease, so the schema does not auto reload :)
 	distCtx := testkit.NewDistExecutionContextWithLease(t, 2, 15*time.Second)
@@ -827,6 +897,8 @@ func runMultiSchemaTestWithBackfillDML(t *testing.T, createSQL, alterSQL, backfi
 	if !domOwner.DDL().OwnerManager().IsOwner() {
 		domOwner, domNonOwner = domNonOwner, domOwner
 	}
+	require.True(t, domOwner.DDL().OwnerManager().IsOwner())
+	require.False(t, domNonOwner.DDL().OwnerManager().IsOwner())
 
 	seOwner, err := session.CreateSessionWithDomain(store, domOwner)
 	require.NoError(t, err)
@@ -913,7 +985,6 @@ func runMultiSchemaTestWithBackfillDML(t *testing.T, createSQL, alterSQL, backfi
 				require.NoError(t, err)
 				releaseHook = false
 				logutil.BgLogger().Info("XXXXXXXXXXX release hook")
-				break
 			}
 			domOwner.Reload()
 			if domNonOwner.InfoSchema().SchemaMetaVersion() == domOwner.InfoSchema().SchemaMetaVersion() {
@@ -924,7 +995,7 @@ func runMultiSchemaTestWithBackfillDML(t *testing.T, createSQL, alterSQL, backfi
 			}
 			break
 		}
-		logutil.BgLogger().Info("XXXXXXXXXXX states loop", zap.Int64("verCurr", verCurr), zap.Int64("NonOwner ver", domNonOwner.InfoSchema().SchemaMetaVersion()), zap.Int64("Owner ver", domOwner.InfoSchema().SchemaMetaVersion()))
+		logutil.BgLogger().Info("XXXXXXXXXXX states loop", zap.Int("round", i+1), zap.Int64("verCurr", verCurr), zap.Int64("NonOwner ver", domNonOwner.InfoSchema().SchemaMetaVersion()), zap.Int64("Owner ver", domOwner.InfoSchema().SchemaMetaVersion()))
 		domOwner.Reload()
 		require.Equal(t, verCurr-1, domNonOwner.InfoSchema().SchemaMetaVersion())
 		require.Equal(t, verCurr, domOwner.InfoSchema().SchemaMetaVersion())

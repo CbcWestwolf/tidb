@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/tidb/pkg/resourcemanager/pool/workerpool"
 	poolutil "github.com/pingcap/tidb/pkg/resourcemanager/util"
 	"github.com/pingcap/tidb/pkg/sessionctx"
+	"github.com/pingcap/tidb/pkg/sessiontxn"
 	"github.com/pingcap/tidb/pkg/table"
 	"github.com/pingcap/tidb/pkg/table/tables"
 	"github.com/pingcap/tidb/pkg/tablecodec"
@@ -57,7 +58,6 @@ type CheckTableExec struct {
 	indexInfos []*model.IndexInfo
 	srcs       []*IndexLookUpExecutor
 	done       bool
-	is         infoschema.InfoSchema
 	exitCh     chan struct{}
 	retCh      chan error
 	checkIndex bool
@@ -430,11 +430,13 @@ func (w *checkIndexWorker) HandleTask(task checkIndexTask, _ func(workerpool.Non
 			"select bit_xor(%s), %s, count(*) from %s use index(`%s`) where %s = 0 group by %s",
 			md5HandleAndIndexCol, groupByKey, tblName, idxInfo.Name, whereKey, groupByKey)
 
+		schemaVersion := w.e.is.SchemaMetaVersion()
 		logutil.BgLogger().Info(
 			"fast check table by group",
 			zap.String("table name", tblMeta.Name.String()),
 			zap.String("index name", idxInfo.Name.String()),
 			zap.Int("times", times),
+			zap.Int64("schema version", schemaVersion),
 			zap.Int("current offset", offset), zap.Int("current mod", mod),
 			zap.String("table sql", tblQuery), zap.String("index sql", idxQuery),
 		)
@@ -458,6 +460,18 @@ func (w *checkIndexWorker) HandleTask(task checkIndexTask, _ func(workerpool.Non
 		slices.SortFunc(indexChecksum, func(i, j groupByChecksum) int {
 			return cmp.Compare(i.bucket, j.bucket)
 		})
+
+		tablePlan := getPlan(w.e.contextCtx, se, tblQuery)
+		indexPlan := getPlan(w.e.contextCtx, se, idxQuery)
+		logutil.BgLogger().Info("cbc0411 HandleTask",
+			zap.Int("table length", len(tableChecksum)),
+			zap.Int("index length", len(indexChecksum)),
+			zap.String("table plan", tablePlan),
+			zap.String("index plan", indexPlan),
+			zap.Bool("owner", se.IsDDLOwner()),
+			zap.Int64("schema version", se.GetInfoSchema().SchemaMetaVersion()),
+			zap.Int64("txn schema version", sessiontxn.GetTxnManager(se).GetTxnInfoSchema().SchemaMetaVersion()),
+			zap.Int64("domain schema version", se.GetDomainInfoSchema().SchemaMetaVersion()))
 
 		currentOffset := 0
 
@@ -713,6 +727,35 @@ func getCheckSum(ctx context.Context, se sessionctx.Context, sql string) ([]grou
 		checksums = append(checksums, groupByChecksum{bucket: row.GetUint64(1), checksum: row.GetUint64(0), count: row.GetInt64(2)})
 	}
 	return checksums, nil
+}
+
+func getPlan(ctx context.Context, se sessionctx.Context, sql string) string {
+	ctx = kv.WithInternalSourceType(ctx, kv.InternalTxnAdmin)
+	rs, err := se.GetSQLExecutor().ExecuteInternal(ctx, fmt.Sprintf("explain %s", sql))
+	if err != nil {
+		return err.Error()
+	}
+	defer func(rs sqlexec.RecordSet) {
+		err := rs.Close()
+		if err != nil {
+			logutil.BgLogger().Error("close record set failed", zap.Error(err))
+		}
+	}(rs)
+	rows, err := sqlexec.DrainRecordSet(ctx, rs, 256)
+	if err != nil {
+		return err.Error()
+	}
+	var sb strings.Builder
+	for _, row := range rows {
+		sb.WriteString(row.GetString(0))
+		sb.WriteString(" ")
+		sb.WriteString(row.GetString(2))
+		sb.WriteString(" ")
+		sb.WriteString(row.GetString(4))
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
 }
 
 // TableName returns `schema`.`table`

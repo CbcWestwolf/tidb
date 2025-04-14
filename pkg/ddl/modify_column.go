@@ -180,8 +180,7 @@ func (w *worker) onModifyColumn(jobCtx *jobContext, job *model.Job) (ver int64, 
 }
 
 // rollbackModifyColumnJob rollbacks the job when an error occurs.
-func rollbackModifyColumnJob(jobCtx *jobContext, tblInfo *model.TableInfo, job *model.Job, newCol, oldCol *model.ColumnInfo, modifyColumnTp byte) (ver int64, _ error) {
-	var err error
+func rollbackModifyColumnJob(jobCtx *jobContext, tblInfo *model.TableInfo, job *model.Job, newCol, oldCol *model.ColumnInfo, modifyColumnTp byte) (ver int64, err error) {
 	if oldCol.ID == newCol.ID && modifyColumnTp == mysql.TypeNull {
 		// field NotNullFlag flag reset.
 		tblInfo.Columns[oldCol.Offset].SetFlag(oldCol.GetFlag() &^ mysql.NotNullFlag)
@@ -640,8 +639,6 @@ func doReorgWorkForModifyColumn(w *worker, jobCtx *jobContext, job *model.Job, t
 				addIndexErr = dbterror.ErrCancelledDDLJob.GenWithStack("modify table `%v` column `%v` panic", tbl.Meta().Name, oldCol.Name)
 			}, false)
 		// Use old column name to generate less confusing error messages.
-		changingColCpy := changingCol.Clone()
-		changingColCpy.Name = oldCol.Name
 		return w.updateCurrentElement(jobCtx, tbl, reorgInfo)
 	})
 	if err != nil {
