@@ -29,6 +29,7 @@ import (
 	jwsRepo "github.com/lestrrat-go/jwx/v2/jws"
 	jwtRepo "github.com/lestrrat-go/jwx/v2/jwt"
 	"github.com/lestrrat-go/jwx/v2/jwt/openid"
+	"github.com/pingcap/tidb/pkg/parser/auth"
 	"github.com/pingcap/tidb/pkg/util/hack"
 	"github.com/stretchr/testify/require"
 )
@@ -442,6 +443,6 @@ func (p *immutable) DefaultRoles() []defaultRoleRecord {
 	return p.defaultRoles
 }
 
-func (p *immutable) RoleGraph() map[string]roleGraphEdgesTable {
+func (p *immutable) RoleGraph() map[auth.RoleIdentity]roleGraphEdgesTable {
 	return p.roleGraph
 }
